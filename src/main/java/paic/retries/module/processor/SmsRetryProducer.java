@@ -1,6 +1,5 @@
 package paic.retries.module.processor;
 
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.paicbd.smsc.dto.MessageEvent;
 import com.paicbd.smsc.utils.Converter;
 import lombok.RequiredArgsConstructor;
@@ -34,8 +33,8 @@ public class SmsRetryProducer {
         }
         log.info("Putting {} messages to the queue", smsList.size());
         Collection<MessageEvent> submitSmEvents = smsList.stream()
-                .map(message -> Converter.stringToObject(message, new TypeReference<MessageEvent>() {
-                }))
+                .map(message -> Converter.stringToObject(message, MessageEvent.class))
+                .filter(Objects::nonNull)
                 .toList();
 
         Flux.fromIterable(submitSmEvents)
