@@ -1,18 +1,21 @@
 package paic.retries.module.config;
 
 import com.paicbd.smsc.dto.UtilsRecords;
+import com.paicbd.smsc.utils.Generated;
 import com.paicbd.smsc.ws.SocketClient;
 import com.paicbd.smsc.ws.SocketSession;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import paic.retries.module.component.CustomFrameHandler;
 import paic.retries.module.utils.AppProperties;
 
 import java.util.List;
 
-import static paic.retries.module.config.CustomFrameHandler.UPDATE_RETRY_PARAMS;
+import static paic.retries.module.component.CustomFrameHandler.UPDATE_RETRY_PARAMS;
 
+@Generated
 @Slf4j
 @Configuration
 @RequiredArgsConstructor
