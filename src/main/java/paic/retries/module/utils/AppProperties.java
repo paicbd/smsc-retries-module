@@ -1,11 +1,13 @@
 package paic.retries.module.utils;
 
+import com.paicbd.smsc.utils.Generated;
 import lombok.Getter;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
 
+@Generated
 @Getter
 @Component
 public class AppProperties {

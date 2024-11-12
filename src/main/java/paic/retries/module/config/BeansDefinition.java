@@ -2,6 +2,7 @@ package paic.retries.module.config;
 
 import com.paicbd.smsc.dto.UtilsRecords;
 import com.paicbd.smsc.utils.Converter;
+import com.paicbd.smsc.utils.Generated;
 import com.paicbd.smsc.ws.SocketSession;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
@@ -11,6 +12,7 @@ import redis.clients.jedis.JedisCluster;
 
 import java.util.List;
 
+@Generated
 @Configuration
 @RequiredArgsConstructor
 public class BeansDefinition {

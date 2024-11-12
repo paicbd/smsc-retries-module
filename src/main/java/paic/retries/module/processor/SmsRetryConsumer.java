@@ -1,6 +1,5 @@
 package paic.retries.module.processor;
 
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.paicbd.smsc.dto.MessageEvent;
 import com.paicbd.smsc.utils.Converter;
 import lombok.RequiredArgsConstructor;
@@ -8,7 +7,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import paic.retries.module.config.RetryParams;
+import paic.retries.module.component.RetryParams;
 import paic.retries.module.utils.AppProperties;
 import reactor.core.publisher.Flux;
 import reactor.core.scheduler.Schedulers;
@@ -16,6 +15,7 @@ import redis.clients.jedis.JedisCluster;
 
 import java.util.Collection;
 import java.util.List;
+import java.util.Objects;
 
 @Slf4j
 @Component
@@ -36,8 +36,8 @@ public class SmsRetryConsumer {
 
         List<String> smsList = this.jedisCluster.lpop(appProperties.getSmsRetryListName(), size);
         Collection<MessageEvent> submitSmEvents = smsList.stream()
-                .map(message -> Converter.stringToObject(message, new TypeReference<MessageEvent>() {
-                }))
+                .map(message -> Converter.stringToObject(message, MessageEvent.class))
+                .filter(Objects::nonNull)
                 .toList();
 
         long currentTimeSeconds = getCurrentTimeSeconds();
@@ -46,7 +46,7 @@ public class SmsRetryConsumer {
                 .runOn(Schedulers.boundedElastic())
                 .flatMap(submitSmEvent -> {
                     log.info("Message to Process: {}", submitSmEvent.getMessageId());
-                    if (Integer.parseInt(submitSmEvent.getValidityPeriod()) < this.retryParams.getFirstRetryDelay()) {
+                    if (submitSmEvent.getValidityPeriod() < this.retryParams.getFirstRetryDelay()) {
                         return Flux.empty();
                     }
 
@@ -62,7 +62,7 @@ public class SmsRetryConsumer {
                     submitSmEvent.setDueDelay(currentDueDelay);
                     submitSmEvent.setAccumulatedTime(submitSmEvent.getAccumulatedTime() + currentDueDelay);
                     int nextDueDelay = currentDueDelay * this.retryParams.getRetryDelayMultiplier();
-                    int validityPeriod = Integer.parseInt(submitSmEvent.getValidityPeriod());
+                    long validityPeriod = submitSmEvent.getValidityPeriod();
 
                     // Elapsed time on all retries is the sum of accumulated time and next due delay
                     int nextElapsedTimeOnAllRetries = submitSmEvent.getAccumulatedTime() + nextDueDelay;
@@ -73,9 +73,8 @@ public class SmsRetryConsumer {
 
                     String listToPut = String.valueOf(currentTimeSeconds + currentDueDelay);
                     this.jedisCluster.rpush(listToPut, submitSmEvent.toString());
-                    log.info("NextElapseTimeOnAllRetries: {} - AccumulatedTime: {} - NextDueDelay: {} - ConfiguredValidityPeriod: {} - LastRetry: {}",
-                            nextElapsedTimeOnAllRetries, submitSmEvent.getAccumulatedTime(), nextDueDelay, validityPeriod, submitSmEvent.isLastRetry());
-                    log.info("Putted to list: {}", listToPut);
+                    log.info("NextElapseTimeOnAllRetries: {} - AccumulatedTime: {} - NextDueDelay: {} - ConfiguredValidityPeriod: {} - LastRetry: {} - ListToPut: {}",
+                            nextElapsedTimeOnAllRetries, submitSmEvent.getAccumulatedTime(), nextDueDelay, validityPeriod, submitSmEvent.isLastRetry(), listToPut);
                     return Flux.empty();
                 })
                 .subscribe();

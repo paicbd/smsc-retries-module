@@ -45,7 +45,7 @@
 	</developers>
 	<properties>
 		<java.version>21</java.version>
-		<smsc-utils.version>2.0.0-1</smsc-utils.version>
+		<smsc-utils.version>2.0.0-4</smsc-utils.version>
 		<redis.clients.version>5.0.2</redis.clients.version>
 		<!-- Plugin versions -->
 		<junit.jupiter.version>5.10.3</junit.jupiter.version>
