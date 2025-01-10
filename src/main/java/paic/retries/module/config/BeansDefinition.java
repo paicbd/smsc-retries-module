@@ -10,8 +10,6 @@ import org.springframework.context.annotation.Configuration;
 import paic.retries.module.utils.AppProperties;
 import redis.clients.jedis.JedisCluster;
 
-import java.util.List;
-
 @Generated
 @Configuration
 @RequiredArgsConstructor
@@ -25,11 +23,12 @@ public class BeansDefinition {
 
     @Bean
     public JedisCluster jedisCluster() {
-        return Converter.paramsToJedisCluster(getJedisClusterParams(properties.getRedisNodes(), properties.getMaxTotal(),
-                properties.getMinIdle(), properties.getMaxIdle(), properties.isBlockWhenExhausted()));
-    }
-
-    private UtilsRecords.JedisConfigParams getJedisClusterParams(List<String> nodes, int maxTotal, int minIdle, int maxIdle, boolean blockWhenExhausted) {
-        return new UtilsRecords.JedisConfigParams(nodes, maxTotal, minIdle, maxIdle, blockWhenExhausted);
+        return Converter.paramsToJedisCluster(
+                new UtilsRecords.JedisConfigParams(properties.getRedisNodes(), properties.getRedisMaxTotal(),
+                        properties.getRedisMaxIdle(), properties.getRedisMinIdle(),
+                        properties.isRedisBlockWhenExhausted(), properties.getRedisConnectionTimeout(),
+                        properties.getRedisSoTimeout(), properties.getRedisMaxAttempts(),
+                        properties.getRedisUser(), properties.getRedisPassword())
+        );
     }
 }
