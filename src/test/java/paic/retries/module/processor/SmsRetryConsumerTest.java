@@ -1,0 +1,284 @@
+package paic.retries.module.processor;
+
+import com.paicbd.smsc.dto.MessageEvent;
+import com.paicbd.smsc.scylla.ScyllaManager;
+import com.paicbd.smsc.utils.Converter;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.mockito.ArgumentCaptor;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import paic.retries.module.component.RetryParams;
+
+import java.util.List;
+import java.util.function.BiConsumer;
+import java.util.stream.Stream;
+
+import static org.awaitility.Awaitility.await;
+import static org.awaitility.Durations.ONE_SECOND;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+@ExtendWith(MockitoExtension.class)
+class SmsRetryConsumerTest {
+    private static long currentTimeSeconds;
+
+    @Mock
+    RetryParams retryParams;
+
+    @Mock
+    ScyllaManager scyllaManager;
+
+    @InjectMocks
+    SmsRetryConsumer smsRetryConsumer;
+
+    @BeforeEach
+    void initValues() {
+        currentTimeSeconds = System.currentTimeMillis() / 1000;
+    }
+
+    static Stream<BiConsumer<SmsRetryConsumer, List<String>>> priorityMethodProvider() {
+        return Stream.of(
+                SmsRetryConsumer::processHighPriorityMessage,
+                SmsRetryConsumer::processMediumPriorityMessage,
+                SmsRetryConsumer::processLowPriorityMessage
+        );
+    }
+
+
+    @DisplayName("Adding the message into the retry list when it is a first retry")
+    @ParameterizedTest
+    @MethodSource("priorityMethodProvider")
+    void smsConsumerWhenIsFirstRetryThenCheckValues(BiConsumer<SmsRetryConsumer, List<String>> priorityMethod) {
+        int maxDueDelay = 86400;
+        int delayMultiplier = 2;
+        int firstRetryDelay = 10;
+        when(this.retryParams.getMaxDueDelay()).thenReturn(maxDueDelay);
+        when(this.retryParams.getRetryDelayMultiplier()).thenReturn(delayMultiplier);
+        when(this.retryParams.getFirstRetryDelay()).thenReturn(firstRetryDelay);
+        String milliSeconds = System.currentTimeMillis() + "";
+        MessageEvent messageEventTaken = MessageEvent.builder()
+                .id(milliSeconds + "-11028072268459")
+                .messageId("1719421854353-11028072268459")
+                .systemId("systemId")
+                .deliverSmId("1")
+                .sourceAddrNpi(1)
+                .sourceAddr("50510201020")
+                .destAddrTon(1)
+                .destAddrNpi(1)
+                .destinationAddr("50582368999")
+                .errorCode(500) // HTTP Error Code
+                .validityPeriod(300)
+                .accumulatedTime(0)
+                .dueDelay(0)
+                .retryNumber(1)
+                .build();
+        priorityMethod.accept(this.smsRetryConsumer, List.of(messageEventTaken.toString()));
+        toSleep();
+        ArgumentCaptor<String> messageCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<Long> sendTimeCaptor = ArgumentCaptor.forClass(Long.class);
+        verify(scyllaManager).insertIntoRetriesTable(sendTimeCaptor.capture(), messageCaptor.capture());
+        String message = messageCaptor.getValue();
+        MessageEvent messageEvent = Converter.stringToObject(message, MessageEvent.class);
+        assertNotNull(messageEvent);
+        assertTrue(messageEvent.isRetry());
+        assertEquals(10, messageEvent.getAccumulatedTime());
+        assertEquals(10, messageEvent.getDueDelay());
+        assertTrue( sendTimeCaptor.getValue() > currentTimeSeconds);
+    }
+
+    @DisplayName("Adding the message into the retry list when it is not a first retry")
+    @ParameterizedTest
+    @MethodSource("priorityMethodProvider")
+    void smsConsumerWhenIsNotFirstRetryThenCheckValues(BiConsumer<SmsRetryConsumer, List<String>> priorityMethod) {
+        int maxDueDelay = 86400;
+        int delayMultiplier = 2;
+        int firstRetryDelay = 10;
+        when(this.retryParams.getMaxDueDelay()).thenReturn(maxDueDelay);
+        when(this.retryParams.getRetryDelayMultiplier()).thenReturn(delayMultiplier);
+        when(this.retryParams.getFirstRetryDelay()).thenReturn(firstRetryDelay);
+        String milliSeconds = System.currentTimeMillis() + "";
+        MessageEvent messageEventTaken = MessageEvent.builder()
+                .id(milliSeconds + "-11028072268459")
+                .messageId("1719421854353-11028072268459")
+                .systemId("systemId")
+                .deliverSmId("1")
+                .sourceAddrNpi(1)
+                .sourceAddr("50510201020")
+                .destAddrTon(1)
+                .destAddrNpi(1)
+                .destinationAddr("50582368999")
+                .errorCode(500) // HTTP Error Code
+                .validityPeriod(180)
+                .dueDelay(10)
+                .accumulatedTime(10)
+                .retryNumber(2)
+                .build();
+        priorityMethod.accept(this.smsRetryConsumer, List.of(messageEventTaken.toString()));
+        toSleep();
+        ArgumentCaptor<String> messageCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<Long> sendTimeCaptor = ArgumentCaptor.forClass(Long.class);
+        verify(scyllaManager).insertIntoRetriesTable(sendTimeCaptor.capture(), messageCaptor.capture());
+        String message = messageCaptor.getValue();
+        MessageEvent messageEvent = Converter.stringToObject(message, MessageEvent.class);
+        assertNotNull(messageEvent);
+        assertTrue(messageEvent.isRetry());
+        assertEquals(30, messageEvent.getAccumulatedTime());
+        assertEquals(20, messageEvent.getDueDelay());
+        assertTrue(sendTimeCaptor.getValue() > currentTimeSeconds);
+    }
+
+
+    @DisplayName("Validating when validity period less that first retry value")
+    @ParameterizedTest
+    @MethodSource("priorityMethodProvider")
+    void smsConsumerWhenValidityPeriodLessThatFirstRetryThenDoNothing(BiConsumer<SmsRetryConsumer, List<String>> priorityMethod) {
+        int firstRetryDelay = 20;
+        when(this.retryParams.getFirstRetryDelay()).thenReturn(firstRetryDelay);
+        String milliSeconds = System.currentTimeMillis() + "";
+        MessageEvent messageEventTaken = MessageEvent.builder()
+                .id(milliSeconds + "-11028072268459")
+                .messageId("1719421854353-11028072268459")
+                .systemId("systemId")
+                .deliverSmId("1")
+                .sourceAddrNpi(1)
+                .sourceAddr("50510201020")
+                .destAddrTon(1)
+                .destAddrNpi(1)
+                .destinationAddr("50582368999")
+                .errorCode(500) // HTTP Error Code
+                .validityPeriod(10)
+                .accumulatedTime(0)
+                .dueDelay(0)
+                .retryNumber(1)
+                .build();
+        priorityMethod.accept(this.smsRetryConsumer, List.of(messageEventTaken.toString()));
+        toSleep();
+        assertEquals(0, messageEventTaken.getAccumulatedTime());
+        assertEquals(0, messageEventTaken.getDueDelay());
+        verify(scyllaManager, never()).insertIntoRetriesTable(anyLong(), anyString());
+    }
+
+    @DisplayName("Validating when fail to get received time")
+    @ParameterizedTest
+    @MethodSource("priorityMethodProvider")
+    void smsConsumerWhenFailToGetReceivedTimeThenDoNothing(BiConsumer<SmsRetryConsumer, List<String>> priorityMethod) {
+        MessageEvent messageEventTaken = MessageEvent.builder()
+                .messageId("1719421854353-11028072268459")
+                .systemId("systemId")
+                .deliverSmId("1")
+                .sourceAddrNpi(1)
+                .sourceAddr("50510201020")
+                .destAddrTon(1)
+                .destAddrNpi(1)
+                .destinationAddr("50582368999")
+                .errorCode(500) // HTTP Error Code
+                .validityPeriod(10)
+                .accumulatedTime(0)
+                .dueDelay(0)
+                .retryNumber(1)
+                .build();
+        priorityMethod.accept(this.smsRetryConsumer, List.of(messageEventTaken.toString()));
+        toSleep();
+        assertEquals(0, messageEventTaken.getAccumulatedTime());
+        assertEquals(0, messageEventTaken.getDueDelay());
+        verify(scyllaManager, never()).insertIntoRetriesTable(anyLong(), anyString());
+    }
+
+    @ParameterizedTest
+    @MethodSource("priorityMethodProvider")
+    @DisplayName("Setting is last retry when next elapsed time is greater or equals that the max due delay")
+    void smsConsumerWhenElapsedTimeIsGreaterThanMaxDueDelayThenSetLastRetry(BiConsumer<SmsRetryConsumer, List<String>> priorityMethod) {
+        int maxDueDelay = 900;
+        int delayMultiplier = 2;
+        int firstRetryDelay = 10;
+        when(this.retryParams.getMaxDueDelay()).thenReturn(maxDueDelay);
+        when(this.retryParams.getRetryDelayMultiplier()).thenReturn(delayMultiplier);
+        when(this.retryParams.getFirstRetryDelay()).thenReturn(firstRetryDelay);
+        String milliSeconds = System.currentTimeMillis() + "";
+        MessageEvent messageEventTaken = MessageEvent.builder()
+                .id(milliSeconds + "-11028072268459")
+                .messageId("1719421854353-11028072268459")
+                .systemId("systemId")
+                .deliverSmId("1")
+                .sourceAddrNpi(1)
+                .sourceAddr("50510201020")
+                .destAddrTon(1)
+                .destAddrNpi(1)
+                .destinationAddr("50582368999")
+                .errorCode(500) // HTTP Error Code
+                .validityPeriod(3000)
+                .dueDelay(160)
+                .accumulatedTime(310)
+                .retryNumber(6)
+                .build();
+        priorityMethod.accept(this.smsRetryConsumer, List.of(messageEventTaken.toString()));
+        toSleep();
+        ArgumentCaptor<String> messageCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<Long> sendTimeCaptor = ArgumentCaptor.forClass(Long.class);
+        verify(scyllaManager).insertIntoRetriesTable(sendTimeCaptor.capture(), messageCaptor.capture());
+        String message = messageCaptor.getValue();
+        MessageEvent messageEvent = Converter.stringToObject(message, MessageEvent.class);
+        assertNotNull(messageEvent);
+        assertTrue(messageEvent.isRetry());
+        assertTrue(messageEvent.isLastRetry());
+        assertEquals(630, messageEvent.getAccumulatedTime());
+        assertEquals(320, messageEvent.getDueDelay());
+        assertTrue(sendTimeCaptor.getValue() > currentTimeSeconds);
+    }
+
+    @ParameterizedTest
+    @MethodSource("priorityMethodProvider")
+    @DisplayName("Setting is last retry when next elapsed time is greater or equals that the validity period")
+    void smsConsumerWhenElapsedTimeIsGreaterThanValidityPeriodThenSetLastRetry(BiConsumer<SmsRetryConsumer, List<String>> priorityMethod) {
+        int maxDueDelay = 3000;
+        int delayMultiplier = 2;
+        int firstRetryDelay = 10;
+        when(this.retryParams.getMaxDueDelay()).thenReturn(maxDueDelay);
+        when(this.retryParams.getRetryDelayMultiplier()).thenReturn(delayMultiplier);
+        when(this.retryParams.getFirstRetryDelay()).thenReturn(firstRetryDelay);
+
+        String milliSeconds = System.currentTimeMillis() + "";
+        MessageEvent messageEventTaken = MessageEvent.builder()
+                .id(milliSeconds + "-11028072268459")
+                .messageId("1719421854353-11028072268459")
+                .systemId("systemId")
+                .deliverSmId("1")
+                .sourceAddrNpi(1)
+                .sourceAddr("50510201020")
+                .destAddrTon(1)
+                .destAddrNpi(1)
+                .destinationAddr("50582368999")
+                .errorCode(500) // HTTP Error Code
+                .validityPeriod(30)
+                .retryNumber(1)
+                .build();
+        priorityMethod.accept(this.smsRetryConsumer, List.of(messageEventTaken.toString()));
+        toSleep();
+        ArgumentCaptor<String> messageCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<Long> sendTimeCaptor = ArgumentCaptor.forClass(Long.class);
+        verify(scyllaManager).insertIntoRetriesTable(sendTimeCaptor.capture(), messageCaptor.capture());
+        String message = messageCaptor.getValue();
+        MessageEvent messageEvent = Converter.stringToObject(message, MessageEvent.class);
+        assertNotNull(messageEvent);
+        assertTrue(messageEvent.isRetry());
+        assertTrue(messageEvent.isLastRetry());
+        assertEquals(10, messageEvent.getAccumulatedTime());
+        assertEquals(10, messageEvent.getDueDelay());
+        assertTrue(sendTimeCaptor.getValue() > currentTimeSeconds);
+    }
+
+    private static void toSleep() {
+        await().atMost(ONE_SECOND).until(() -> true);
+    }
+}
